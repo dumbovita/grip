@@ -85,6 +85,7 @@ chrome.contextMenus.onClicked.addListener(async (info) => {
     if (!targetFormat) return;
 
     const imageUrl = info.srcUrl;
+    const pageUrl = info.pageUrl;
 
     let dataUrl;
     const isDataUrl = imageUrl.startsWith("data:");
@@ -97,7 +98,10 @@ chrome.contextMenus.onClicked.addListener(async (info) => {
         } catch (err) {
             console.error("grip: fetch failed:", imageUrl, err.message);
             try {
-                await chrome.downloads.download({ url: imageUrl });
+                await chrome.downloads.download({
+                    url: imageUrl,
+                    ...(pageUrl && { headers: [{ name: "Referer", value: pageUrl }] }),
+                });
                 notify(`Saved in original format — could not convert to ${displayMap[targetFormat]}`);
             } catch (downloadErr) {
                 console.error("grip: fallback failed:", downloadErr.message);
@@ -132,7 +136,11 @@ chrome.contextMenus.onClicked.addListener(async (info) => {
                 if (safeExt) fallbackFilename = `image.${safeExt}`;
             }
             try {
-                await chrome.downloads.download({ url: imageUrl, ...(isDataUrl && { filename: fallbackFilename }) });
+                await chrome.downloads.download({
+                    url: imageUrl,
+                    ...(isDataUrl && { filename: fallbackFilename }),
+                    ...(!isDataUrl && pageUrl && { headers: [{ name: "Referer", value: pageUrl }] }),
+                });
                 notify(`Saved in original format — conversion to ${displayMap[targetFormat]} failed`);
             } catch (downloadErr) {
                 console.error("grip: fallback failed:", downloadErr.message);
