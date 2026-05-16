@@ -1,0 +1,22 @@
+{
+  "name": "grip",
+  "description": "Get Right-click Images Properly: save images as PNG, JPG, or WebP.",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wxt",
+    "dev:firefox": "wxt -b firefox",
+    "build": "wxt build",
+    "build:firefox": "wxt build -b firefox",
+    "zip": "wxt zip",
+    "zip:firefox": "wxt zip -b firefox",
+    "test": "node src/conversion.test.ts && node src/download.test.ts && npm run compile",
+    "compile": "tsc --noEmit",
+    "postinstall": "wxt prepare"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "wxt": "^0.20.0"
+  }
+}
