@@ -4,7 +4,7 @@ import test from "node:test";
 
 import { buildOriginalDownload, dataUrlToBlob } from "./download.ts";
 
-const photoUrl = "https://litterbox.catbox.moe/resources/qts/1428178080167.png";
+const photoUrl = "https://upload.wikimedia.org/wikipedia/commons/4/47/PNG_transparency_demonstration_1.png";
 const fixturePath = "test/fixtures/1428178080167.test.png";
 const photoDataUrl = `data:image/png;base64,${readFileSync(fixturePath, "base64")}`;
 
@@ -28,3 +28,4 @@ test("dataUrlToBlob preserves real photo bytes for extension-owned downloads", a
   assert.equal(blob.type, "image/png");
   assert.equal(blob.size, fixture.byteLength);
 });
+
