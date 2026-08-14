@@ -5,7 +5,7 @@ export default defineConfig({
     excludeSources: ["test/**"],
   },
   manifest: ({ browser, manifestVersion }) => ({
-    version: "2.0.0",
+    version: "2.1.0",
     name: "grip",
     description: "Get Right-click Images Properly: save images as PNG, JPG, or WebP.",
     permissions: [
