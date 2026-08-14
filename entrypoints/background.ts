@@ -1,6 +1,6 @@
 import type { Browser } from "wxt/browser";
 import type { ConvertFormat, ConvertResponse } from "../src/types";
-import { buildFilename, convertImage, isSameImageFormat } from "../src/conversion";
+import { blobToDataUrl, buildFilename, convertImage, isSameImageFormat, sniffImageFormat } from "../src/conversion";
 import { buildOriginalDownload, dataUrlToBlob } from "../src/download";
 
 type FetchedImage =
@@ -12,42 +12,65 @@ export default defineBackground(() => {
   const formatMap: Record<string, ConvertFormat> = { "save-png": "png", "save-jpg": "jpeg", "save-webp": "webp" };
   const displayMap: Record<ConvertFormat, string> = { png: "PNG", jpeg: "JPG", webp: "WebP" };
 
-  let offscreenPending: Promise<void> | null = null;
+  let offscreenPromise: Promise<void> | null = null;
+  let activeConversions = 0;
+  let closeTimeout: ReturnType<typeof setTimeout> | null = null;
+  let notificationCounter = 0;
 
-  function notify(message: string) {
-    browser.notifications.create(`grip-${Date.now()}`, {
-      type: "basic",
-      iconUrl: "icons/icon48.png",
-      title: "grip",
-      message,
-    });
+  function notify(message: string): void {
+    const id = `grip-${Date.now()}-${++notificationCounter}`;
+    browser.notifications
+      .create(id, {
+        type: "basic",
+        iconUrl: "icons/icon48.png",
+        title: "grip",
+        message,
+      })
+      .catch((err) => {
+        console.error("grip: notification failed:", err);
+      });
   }
 
-  async function ensureOffscreenDocument() {
+  async function acquireOffscreenDocument(): Promise<void> {
+    if (closeTimeout) {
+      clearTimeout(closeTimeout);
+      closeTimeout = null;
+    }
+    activeConversions++;
+
     if (await browser.offscreen.hasDocument()) return;
 
-    offscreenPending ??= browser.offscreen
+    offscreenPromise ??= browser.offscreen
       .createDocument({
         url: "offscreen.html",
         reasons: ["BLOBS"],
         justification: "Convert image to target format using Canvas API",
       })
       .finally(() => {
-        offscreenPending = null;
+        offscreenPromise = null;
       });
 
-    await offscreenPending;
+    await offscreenPromise;
   }
 
-  async function closeOffscreenDocument() {
-    try {
-      await browser.offscreen.closeDocument();
-    } catch {
-      // Ignore errors when closing
-    }
+  function releaseOffscreenDocument(): void {
+    activeConversions = Math.max(0, activeConversions - 1);
+    if (activeConversions > 0) return;
+
+    if (closeTimeout) clearTimeout(closeTimeout);
+    closeTimeout = setTimeout(async () => {
+      closeTimeout = null;
+      if (activeConversions === 0 && (await browser.offscreen.hasDocument())) {
+        try {
+          await browser.offscreen.closeDocument();
+        } catch {
+          // Ignore
+        }
+      }
+    }, 10000);
   }
 
-  async function downloadBlob(blob: Blob, filename: string) {
+  async function downloadBlob(blob: Blob, filename: string): Promise<void> {
     const objectUrl = URL.createObjectURL(blob);
     let downloadId: number;
 
@@ -59,14 +82,18 @@ export default defineBackground(() => {
     }
 
     const cleanup = (delta: Browser.downloads.DownloadDelta) => {
-      if (delta.id !== downloadId || !delta.state?.current) return;
-      browser.downloads.onChanged.removeListener(cleanup);
-      URL.revokeObjectURL(objectUrl);
+      if (delta.id !== downloadId) return;
+      const state = delta.state?.current;
+      if (state === "complete" || state === "interrupted") {
+        browser.downloads.onChanged.removeListener(cleanup);
+        URL.revokeObjectURL(objectUrl);
+      }
     };
+
     browser.downloads.onChanged.addListener(cleanup);
   }
 
-  async function downloadDataUrl(dataUrl: string, filename: string) {
+  async function downloadDataUrl(dataUrl: string, filename: string): Promise<void> {
     if (import.meta.env.MANIFEST_VERSION === 2) {
       await downloadBlob(await dataUrlToBlob(dataUrl), filename);
       return;
@@ -79,33 +106,29 @@ export default defineBackground(() => {
     const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
-    const useBlobDownload = import.meta.env.MANIFEST_VERSION === 2;
     const responseMimeType = response.headers.get("content-type") || "";
-    if (!useBlobDownload && isSameImageFormat(responseMimeType, targetFormat)) {
-      return { kind: "download-original-url" };
-    }
+    const buffer = await response.arrayBuffer();
 
-    const blob = await response.blob();
-    const mimeType = blob.type || responseMimeType || "application/octet-stream";
-
-    if (blob.size > 47 * 1024 * 1024) {
+    if (buffer.byteLength > 47 * 1024 * 1024) {
       throw new Error("Image exceeds 47MB limit");
     }
 
-    if (isSameImageFormat(mimeType, targetFormat)) {
-      if (useBlobDownload) {
-        return { kind: "download-original-blob", blob, filename: buildFilename(url, targetFormat) };
+    const sniffed = sniffImageFormat(buffer);
+    const isTarget = sniffed
+      ? sniffed === targetFormat
+      : isSameImageFormat(responseMimeType, targetFormat);
+
+    if (isTarget) {
+      if (import.meta.env.MANIFEST_VERSION === 2) {
+        const mimeType = sniffed ? `image/${sniffed}` : responseMimeType || "application/octet-stream";
+        return { kind: "download-original-blob", blob: new Blob([buffer], { type: mimeType }), filename: buildFilename(url, targetFormat) };
       }
       return { kind: "download-original-url" };
     }
 
-    const buffer = await blob.arrayBuffer();
-    const bytes = new Uint8Array(buffer);
-    const chunks: string[] = [];
-    for (let i = 0; i < bytes.length; i += 8192) {
-      chunks.push(String.fromCharCode(...bytes.subarray(i, i + 8192)));
-    }
-    return { kind: "convert", dataUrl: `data:${mimeType};base64,${btoa(chunks.join(""))}` };
+    const mimeType = (sniffed ? `image/${sniffed}` : responseMimeType) || "application/octet-stream";
+    const dataUrl = await blobToDataUrl(new Blob([buffer], { type: mimeType }));
+    return { kind: "convert", dataUrl };
   }
 
   async function convertDataUrl(dataUrl: string, originalUrl: string, format: ConvertFormat): Promise<ConvertResponse> {
@@ -116,7 +139,7 @@ export default defineBackground(() => {
         return { ok: false, error: err instanceof Error ? err.message : "Unknown error" };
       }
     } else {
-      await ensureOffscreenDocument();
+      await acquireOffscreenDocument();
       try {
         return await Promise.race([
           browser.runtime.sendMessage({
@@ -130,40 +153,44 @@ export default defineBackground(() => {
           ),
         ]);
       } finally {
-        await closeOffscreenDocument();
+        releaseOffscreenDocument();
       }
     }
   }
 
   browser.runtime.onInstalled.addListener(async () => {
-    await browser.contextMenus.removeAll();
+    try {
+      await browser.contextMenus.removeAll();
 
-    await browser.contextMenus.create({
-      id: "grip-parent",
-      title: "Save Image As",
-      contexts: ["image"],
-    });
+      await browser.contextMenus.create({
+        id: "grip-parent",
+        title: "Save Image As",
+        contexts: ["image"],
+      });
 
-    await browser.contextMenus.create({
-      id: "save-png",
-      parentId: "grip-parent",
-      title: "Save as PNG",
-      contexts: ["image"],
-    });
+      await browser.contextMenus.create({
+        id: "save-png",
+        parentId: "grip-parent",
+        title: "Save as PNG",
+        contexts: ["image"],
+      });
 
-    await browser.contextMenus.create({
-      id: "save-jpg",
-      parentId: "grip-parent",
-      title: "Save as JPG",
-      contexts: ["image"],
-    });
+      await browser.contextMenus.create({
+        id: "save-jpg",
+        parentId: "grip-parent",
+        title: "Save as JPG",
+        contexts: ["image"],
+      });
 
-    await browser.contextMenus.create({
-      id: "save-webp",
-      parentId: "grip-parent",
-      title: "Save as WebP",
-      contexts: ["image"],
-    });
+      await browser.contextMenus.create({
+        id: "save-webp",
+        parentId: "grip-parent",
+        title: "Save as WebP",
+        contexts: ["image"],
+      });
+    } catch (err) {
+      console.error("grip: failed to register context menus:", err);
+    }
   });
 
   browser.contextMenus.onClicked.addListener(async (info) => {
@@ -265,3 +292,5 @@ export default defineBackground(() => {
     }
   });
 });
+
+
