@@ -4,8 +4,8 @@ Get Right-click Images Properly: save images as PNG, JPG, or WebP.
 
 ## Requirements
 
-- **Node.js**: v18 or higher
-- **npm**: v9 or higher (comes with Node.js)
+- **Node.js**: v22 or higher
+- **npm**: v10 or higher (comes with Node.js)
 - **Operating System**: Windows, macOS, or Linux
 
 ## Installation

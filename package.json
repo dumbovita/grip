@@ -11,7 +11,7 @@
     "build:firefox": "wxt build -b firefox",
     "zip": "wxt zip",
     "zip:firefox": "wxt zip -b firefox",
-    "test": "node src/conversion.test.ts && node src/download.test.ts && npm run compile",
+    "test": "node --experimental-strip-types src/conversion.test.ts && node --experimental-strip-types src/download.test.ts && npm run compile",
     "compile": "tsc --noEmit",
     "postinstall": "wxt prepare"
   },
