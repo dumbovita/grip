@@ -65,7 +65,7 @@ All build steps are automated through npm scripts defined in `package.json`. The
 
 ## Project Structure
 
-- `entrypoints/` - Extension entry points (background, content scripts, popups)
+- `entrypoints/` - Extension entry points (background, offscreen document, popup, options page)
 - `src/` - Source TypeScript files
 - `public/` - Static assets
 - `.output/` - Build output directory
