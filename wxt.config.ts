@@ -4,6 +4,13 @@ export default defineConfig({
   zip: {
     excludeSources: ["test/**"],
   },
+  vite: () => ({
+    build: {
+      // Extension pages load chunks from their own origin; preloading them
+      // only produces "cross-world extension resource mismatch" warnings.
+      modulePreload: false,
+    },
+  }),
   manifest: ({ browser, manifestVersion }) => ({
     version: "2.2.0",
     name: "grip",
