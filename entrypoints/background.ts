@@ -1,15 +1,16 @@
 import type { Browser } from "wxt/browser";
 import type { ConvertFormat, ConvertResponse } from "../src/types";
 import { blobToDataUrl, buildFilename, convertImage, isSameImageFormat, sniffImageFormat } from "../src/conversion";
-import { buildOriginalDownload, dataUrlToBlob } from "../src/download";
+import { buildOriginalDownload, dataUrlToBlob, withSubfolder } from "../src/download";
+import { formatForMenuItem, menuItems } from "../src/menus";
+import { loadSettings, type Settings } from "../src/settings";
 
 type FetchedImage =
   | { kind: "convert"; dataUrl: string }
   | { kind: "download-original-url" }
-  | { kind: "download-original-blob"; blob: Blob; filename: string };
+  | { kind: "download-original-blob"; blob: Blob };
 
 export default defineBackground(() => {
-  const formatMap: Record<string, ConvertFormat> = { "save-png": "png", "save-jpg": "jpeg", "save-webp": "webp" };
   const displayMap: Record<ConvertFormat, string> = { png: "PNG", jpeg: "JPG", webp: "WebP" };
 
   let offscreenPromise: Promise<void> | null = null;
@@ -29,6 +30,25 @@ export default defineBackground(() => {
       .catch((err) => {
         console.error("grip: notification failed:", err);
       });
+  }
+
+  async function flashBadge(): Promise<void> {
+    const action = import.meta.env.MANIFEST_VERSION === 2 ? browser.browserAction : browser.action;
+    await action.setBadgeBackgroundColor({ color: "#2e7d46" });
+    await action.setBadgeText({ text: "✓" });
+    setTimeout(() => action.setBadgeText({ text: "" }), 2000);
+  }
+
+  async function rebuildMenus(): Promise<void> {
+    try {
+      const settings = await loadSettings();
+      await browser.contextMenus.removeAll();
+      for (const item of menuItems(settings)) {
+        await browser.contextMenus.create({ ...item, contexts: ["image"] });
+      }
+    } catch (err) {
+      console.error("grip: failed to register context menus:", err);
+    }
   }
 
   async function acquireOffscreenDocument(): Promise<void> {
@@ -70,15 +90,26 @@ export default defineBackground(() => {
     }, 10000);
   }
 
-  async function downloadBlob(blob: Blob, filename: string): Promise<void> {
-    const objectUrl = URL.createObjectURL(blob);
-    let downloadId: number;
-
+  async function startDownload(options: Browser.downloads.DownloadOptions, settings: Settings): Promise<number | null> {
     try {
-      downloadId = await browser.downloads.download({ url: objectUrl, filename });
+      if (import.meta.env.MANIFEST_VERSION === 3) {
+        return await browser.downloads.download({ ...options, conflictAction: settings.conflictAction });
+      }
+      return await browser.downloads.download(options);
     } catch (err) {
+      console.error("grip: download failed:", err);
+      if (settings.feedback !== "off") notify("Could not save image — download failed");
+      return null;
+    }
+  }
+
+  async function downloadBlob(blob: Blob, filename: string, settings: Settings): Promise<boolean> {
+    const objectUrl = URL.createObjectURL(blob);
+    const downloadId = await startDownload({ url: objectUrl, filename }, settings);
+
+    if (downloadId === null) {
       URL.revokeObjectURL(objectUrl);
-      throw err;
+      return false;
     }
 
     const cleanup = (delta: Browser.downloads.DownloadDelta) => {
@@ -91,15 +122,19 @@ export default defineBackground(() => {
     };
 
     browser.downloads.onChanged.addListener(cleanup);
+    return true;
   }
 
-  async function downloadDataUrl(dataUrl: string, filename: string): Promise<void> {
+  async function downloadDataUrl(dataUrl: string, filename: string, settings: Settings): Promise<boolean> {
     if (import.meta.env.MANIFEST_VERSION === 2) {
-      await downloadBlob(await dataUrlToBlob(dataUrl), filename);
-      return;
+      return downloadBlob(await dataUrlToBlob(dataUrl), filename, settings);
     }
+    return (await startDownload({ url: dataUrl, filename }, settings)) !== null;
+  }
 
-    await browser.downloads.download({ url: dataUrl, filename });
+  async function saveOriginal(imageUrl: string, settings: Settings): Promise<void> {
+    const downloadId = await startDownload(buildOriginalDownload({ imageUrl, subfolder: settings.subfolder }), settings);
+    if (downloadId !== null) await flashBadge();
   }
 
   async function fetchImage(url: string, targetFormat: ConvertFormat): Promise<FetchedImage> {
@@ -121,7 +156,7 @@ export default defineBackground(() => {
     if (isTarget) {
       if (import.meta.env.MANIFEST_VERSION === 2) {
         const mimeType = sniffed ? `image/${sniffed}` : responseMimeType || "application/octet-stream";
-        return { kind: "download-original-blob", blob: new Blob([buffer], { type: mimeType }), filename: buildFilename(url, targetFormat) };
+        return { kind: "download-original-blob", blob: new Blob([buffer], { type: mimeType }) };
       }
       return { kind: "download-original-url" };
     }
@@ -131,166 +166,128 @@ export default defineBackground(() => {
     return { kind: "convert", dataUrl };
   }
 
-  async function convertDataUrl(dataUrl: string, originalUrl: string, format: ConvertFormat): Promise<ConvertResponse> {
+  function qualityFor(format: ConvertFormat, settings: Settings): number | undefined {
+    if (format === "jpeg") return settings.jpegQuality / 100;
+    if (format === "webp") return settings.webpQuality / 100;
+    return undefined;
+  }
+
+  async function convertDataUrl(dataUrl: string, originalUrl: string, format: ConvertFormat, settings: Settings): Promise<ConvertResponse> {
+    const request = {
+      dataUrl,
+      originalUrl,
+      format,
+      quality: qualityFor(format, settings),
+      background: settings.jpegBackground,
+    };
+
     if (import.meta.env.MANIFEST_VERSION === 2) {
       try {
-        return { ok: true, ...(await convertImage({ dataUrl, originalUrl, format })) };
+        return { ok: true, ...(await convertImage(request)) };
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : "Unknown error" };
       }
-    } else {
-      await acquireOffscreenDocument();
-      try {
-        return await Promise.race([
-          browser.runtime.sendMessage({
-            type: "convert",
-            dataUrl,
-            originalUrl,
-            format,
-          }) as Promise<ConvertResponse>,
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error("Conversion timeout")), 30000),
-          ),
-        ]);
-      } finally {
-        releaseOffscreenDocument();
-      }
+    }
+
+    await acquireOffscreenDocument();
+    try {
+      return await Promise.race([
+        browser.runtime.sendMessage({ type: "convert", ...request }) as Promise<ConvertResponse>,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("Conversion timeout")), 30000),
+        ),
+      ]);
+    } finally {
+      releaseOffscreenDocument();
     }
   }
 
-  browser.runtime.onInstalled.addListener(async () => {
+  async function convertAndSave(dataUrl: string, originalUrl: string, targetFormat: ConvertFormat, filename: string, settings: Settings): Promise<boolean> {
+    let response: ConvertResponse;
     try {
-      await browser.contextMenus.removeAll();
-
-      await browser.contextMenus.create({
-        id: "grip-parent",
-        title: "Save Image As",
-        contexts: ["image"],
-      });
-
-      await browser.contextMenus.create({
-        id: "save-png",
-        parentId: "grip-parent",
-        title: "Save as PNG",
-        contexts: ["image"],
-      });
-
-      await browser.contextMenus.create({
-        id: "save-jpg",
-        parentId: "grip-parent",
-        title: "Save as JPG",
-        contexts: ["image"],
-      });
-
-      await browser.contextMenus.create({
-        id: "save-webp",
-        parentId: "grip-parent",
-        title: "Save as WebP",
-        contexts: ["image"],
-      });
+      response = await convertDataUrl(dataUrl, originalUrl, targetFormat, settings);
     } catch (err) {
-      console.error("grip: failed to register context menus:", err);
+      console.error("grip: conversion failed:", err);
+      await fallbackToOriginal(originalUrl, targetFormat, settings);
+      return false;
     }
-  });
 
-  browser.contextMenus.onClicked.addListener(async (info) => {
-    const targetFormat = formatMap[info.menuItemId];
-    if (!targetFormat) return;
+    if (!response.ok) {
+      console.error("grip: conversion failed:", response.error);
+      await fallbackToOriginal(originalUrl, targetFormat, settings);
+      return false;
+    }
 
-    const imageUrl = info.srcUrl;
-    if (!imageUrl) return;
-    let dataUrl: string;
-    const isDataUrl = imageUrl.startsWith("data:");
+    return downloadDataUrl(response.dataUrl, filename, settings);
+  }
 
-    if (isDataUrl) {
-      dataUrl = imageUrl;
+  async function fallbackToOriginal(imageUrl: string, targetFormat: ConvertFormat, settings: Settings): Promise<void> {
+    const downloadId = await startDownload(buildOriginalDownload({ imageUrl, subfolder: settings.subfolder }), settings);
+    if (downloadId !== null && settings.feedback !== "off") {
+      notify(`Saved in original format — could not convert to ${displayMap[targetFormat]}`);
+    }
+  }
+
+  async function reportSave(targetFormat: ConvertFormat, settings: Settings): Promise<void> {
+    await flashBadge();
+    if (settings.feedback === "all") notify(`Saved as ${displayMap[targetFormat]}`);
+  }
+
+  async function saveImageAs(imageUrl: string, targetFormat: ConvertFormat, settings: Settings): Promise<void> {
+    const filename = withSubfolder(buildFilename(imageUrl, targetFormat), settings.subfolder);
+
+    if (imageUrl.startsWith("data:")) {
       const sourceMimeType = imageUrl.split(";", 1)[0].split(":")[1] || "";
       if (isSameImageFormat(sourceMimeType, targetFormat)) {
-        try {
-          await downloadDataUrl(imageUrl, buildFilename(imageUrl, targetFormat));
-        } catch (downloadErr) {
-          const downloadMessage = downloadErr instanceof Error ? downloadErr.message : "Unknown error";
-          console.error("grip: download failed:", downloadMessage);
-          notify("Could not save image — download failed");
-        }
+        if (await downloadDataUrl(imageUrl, filename, settings)) await reportSave(targetFormat, settings);
         return;
       }
-    } else {
-      let fetchedImage: FetchedImage;
-      try {
-        fetchedImage = await fetchImage(imageUrl, targetFormat);
-      } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : "Unknown error";
-        console.error("grip: fetch failed:", imageUrl, errorMessage);
-        try {
-          await browser.downloads.download(buildOriginalDownload({ imageUrl }));
-          notify(`Saved in original format — could not convert to ${displayMap[targetFormat]}`);
-        } catch (downloadErr) {
-          const downloadMessage = downloadErr instanceof Error ? downloadErr.message : "Unknown error";
-          console.error("grip: fallback failed:", downloadMessage);
-          notify("Could not save image — the server may be blocking access");
-        }
-        return;
+      if (await convertAndSave(imageUrl, imageUrl, targetFormat, filename, settings)) {
+        await reportSave(targetFormat, settings);
       }
-      if (fetchedImage.kind === "download-original-url") {
-        try {
-          await browser.downloads.download(buildOriginalDownload({ imageUrl }));
-        } catch (downloadErr) {
-          const downloadMessage = downloadErr instanceof Error ? downloadErr.message : "Unknown error";
-          console.error("grip: download failed:", downloadMessage);
-          notify("Could not save image — download failed");
-        }
-        return;
-      }
-      if (import.meta.env.MANIFEST_VERSION === 2 && fetchedImage.kind === "download-original-blob") {
-        try {
-          await downloadBlob(fetchedImage.blob, fetchedImage.filename);
-        } catch (downloadErr) {
-          const downloadMessage = downloadErr instanceof Error ? downloadErr.message : "Unknown error";
-          console.error("grip: download failed:", downloadMessage);
-          notify("Could not save image — download failed");
-        }
-        return;
-      }
-      if (fetchedImage.kind !== "convert") {
-        console.error("grip: unexpected download path:", fetchedImage.kind);
-        notify("Could not save image — download failed");
-        return;
-      }
-      dataUrl = fetchedImage.dataUrl;
+      return;
     }
 
-    let response: ConvertResponse | undefined;
+    let fetchedImage: FetchedImage;
     try {
-      response = await convertDataUrl(dataUrl, imageUrl, targetFormat);
+      fetchedImage = await fetchImage(imageUrl, targetFormat);
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : "Unknown error";
-      console.error("grip:", errorMessage);
-      notify(errorMessage === "Conversion timeout" ? "Conversion timed out" : "Could not save image — conversion setup failed");
+      console.error("grip: fetch failed:", imageUrl, err);
+      await fallbackToOriginal(imageUrl, targetFormat, settings);
       return;
     }
 
-    if (!response || !response.ok) {
-      console.error("grip: conversion failed:", response?.error || "unknown");
-      try {
-        await browser.downloads.download(buildOriginalDownload({ imageUrl }));
-        notify(`Saved in original format — conversion to ${displayMap[targetFormat]} failed`);
-      } catch (downloadErr) {
-        const downloadMessage = downloadErr instanceof Error ? downloadErr.message : "Unknown error";
-        console.error("grip: fallback failed:", downloadMessage);
-        notify("Could not save image — conversion error");
-      }
+    if (fetchedImage.kind === "download-original-url") {
+      const downloadId = await startDownload({ url: imageUrl, filename }, settings);
+      if (downloadId !== null) await reportSave(targetFormat, settings);
       return;
     }
 
-    try {
-      await downloadDataUrl(response.dataUrl, response.filename);
-    } catch (downloadErr) {
-      const downloadMessage = downloadErr instanceof Error ? downloadErr.message : "Unknown error";
-      console.error("grip: download failed:", downloadMessage);
-      notify("Could not save image — download failed");
+    if (fetchedImage.kind === "download-original-blob") {
+      if (await downloadBlob(fetchedImage.blob, filename, settings)) await reportSave(targetFormat, settings);
+      return;
     }
+
+    if (await convertAndSave(fetchedImage.dataUrl, imageUrl, targetFormat, filename, settings)) {
+      await reportSave(targetFormat, settings);
+    }
+  }
+
+  browser.runtime.onInstalled.addListener(rebuildMenus);
+  browser.storage.onChanged.addListener(rebuildMenus);
+
+  browser.contextMenus.onClicked.addListener(async (info) => {
+    const imageUrl = info.srcUrl;
+    if (!imageUrl) return;
+
+    const settings = await loadSettings();
+
+    if (info.menuItemId === "save-original") {
+      await saveOriginal(imageUrl, settings);
+      return;
+    }
+
+    const targetFormat = formatForMenuItem(info.menuItemId);
+    if (targetFormat) await saveImageAs(imageUrl, targetFormat, settings);
   });
 });
-
-

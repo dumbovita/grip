@@ -67,7 +67,23 @@ test("buildOriginalFilename preserves the real photo data URL format and handles
   assert.equal(buildOriginalFilename("data:image/svg+xml;base64,123"), "image.svg");
   assert.equal(buildOriginalFilename("data:image/x-icon;base64,123"), "image.ico");
   assert.equal(buildOriginalFilename("data:image/avif;base64,123"), "image.avif");
-  assert.equal(buildOriginalFilename(photoUrl), undefined);
+});
+
+test("buildOriginalFilename keeps the URL basename and extension for real photo URLs", () => {
+  assert.equal(buildOriginalFilename(photoUrl), "PNG_transparency_demonstration_1.png");
+  assert.equal(buildOriginalFilename("https://upload.wikimedia.org/wikipedia/commons/thumb/6/68/Orange_tabby_cat.jpg/800px-Orange_tabby_cat.jpg"), "800px-Orange_tabby_cat.jpg");
+  assert.equal(buildOriginalFilename("https://example.com/my%20cool%20photo.webp"), "my cool photo.webp");
+});
+
+test("buildOriginalFilename defers to the browser for URLs without an extension in the path", () => {
+  assert.equal(buildOriginalFilename("https://pbs.twimg.com/media/HQgnynEXQAA9zlX?format=jpg&name=large"), undefined);
+  assert.equal(buildOriginalFilename("https://avatars.githubusercontent.com/u/9919?v=4"), undefined);
+  assert.equal(buildOriginalFilename("https://example.com/"), undefined);
+  assert.equal(buildOriginalFilename("not-a-valid-url"), undefined);
+});
+
+test("buildOriginalFilename protects against Windows reserved DOS device names", () => {
+  assert.equal(buildOriginalFilename("https://example.com/con.png"), "con_image.png");
 });
 
 test("isSameImageFormat detects when original bytes already satisfy the requested format", () => {

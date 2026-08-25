@@ -4,6 +4,8 @@ export interface ConvertImageRequest {
   dataUrl: string;
   originalUrl: string;
   format: ConvertFormat;
+  quality?: number;
+  background?: string;
 }
 
 export interface ConvertedImage {
@@ -48,14 +50,14 @@ export async function convertImage(request: ConvertImageRequest): Promise<Conver
     if (!ctx) throw new Error("Failed to get canvas context");
 
     if (request.format === "jpeg") {
-      ctx.fillStyle = "#ffffff";
+      ctx.fillStyle = request.background || "#ffffff";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
     ctx.drawImage(img, 0, 0);
 
     try {
       return {
-        dataUrl: canvas.toDataURL(`image/${request.format}`, qualityFor(request.format)),
+        dataUrl: canvas.toDataURL(`image/${request.format}`, request.quality),
         filename: buildFilename(request.originalUrl, request.format),
       };
     } finally {
@@ -74,13 +76,52 @@ export function buildFilename(originalUrl: string, format: ConvertFormat): strin
     return `image.${ext}`;
   }
 
-  try {
-    const parsed = new URL(originalUrl);
-    const segments = parsed.pathname.split("/").filter(Boolean);
-    const lastSegment = segments[segments.length - 1] || "";
+  const basename = basenameFromUrl(originalUrl);
+  if (!basename) {
+    return `image.${ext}`;
+  }
 
+  const baseName = basename.replace(/\.[^.]+$/, "").trim().replace(/\.+$/, "");
+
+  if (!baseName || reservedNames.test(baseName)) {
+    return baseName ? `${baseName}_image.${ext}` : `image.${ext}`;
+  }
+
+  return `${baseName}.${ext}`;
+}
+
+export function buildOriginalFilename(imageUrl: string): string | undefined {
+  if (imageUrl.startsWith("data:")) {
+    const mime = imageUrl.split(";", 1)[0].split(":")[1] || "";
+    const subType = (mime.split("/")[1] || "").toLowerCase().trim();
+    const resolvedExt = extensionMap[subType] || subType;
+    const cleanExt = resolvedExt.replace(/[^a-zA-Z0-9]/g, "");
+
+    return cleanExt ? `image.${cleanExt}` : "image";
+  }
+
+  const basename = basenameFromUrl(imageUrl);
+  if (!basename) {
+    return undefined;
+  }
+
+  const dot = basename.lastIndexOf(".");
+  if (dot <= 0) {
+    return undefined;
+  }
+  const stem = basename.slice(0, dot);
+  const extension = basename.slice(dot);
+
+  return reservedNames.test(stem) ? `${stem}_image${extension}` : basename;
+}
+
+function basenameFromUrl(imageUrl: string): string | undefined {
+  try {
+    const parsed = new URL(imageUrl);
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    const lastSegment = segments[segments.length - 1];
     if (!lastSegment) {
-      return `image.${ext}`;
+      return undefined;
     }
 
     let decodedSegment: string;
@@ -95,27 +136,10 @@ export function buildFilename(originalUrl: string, format: ConvertFormat): strin
       .replace(/\.\.+/g, ".")
       .trim();
 
-    let baseName = sanitized.replace(/\.[^.]+$/, "").trim().replace(/\.+$/, "");
-
-    if (!baseName || reservedNames.test(baseName)) {
-      return baseName ? `${baseName}_image.${ext}` : `image.${ext}`;
-    }
-
-    return `${baseName}.${ext}`;
+    return sanitized || undefined;
   } catch {
-    return `image.${ext}`;
+    return undefined;
   }
-}
-
-export function buildOriginalFilename(originalUrl: string): string | undefined {
-  if (!originalUrl.startsWith("data:")) return undefined;
-
-  const mime = originalUrl.split(";", 1)[0].split(":")[1] || "";
-  const subType = (mime.split("/")[1] || "").toLowerCase().trim();
-  const resolvedExt = extensionMap[subType] || subType;
-  const cleanExt = resolvedExt.replace(/[^a-zA-Z0-9]/g, "");
-
-  return cleanExt ? `image.${cleanExt}` : "image";
 }
 
 export function isSameImageFormat(mimeType: string, format: ConvertFormat): boolean {
@@ -205,11 +229,3 @@ function loadImage(dataUrl: string): Promise<HTMLImageElement> {
     image.src = dataUrl;
   });
 }
-
-function qualityFor(format: ConvertFormat): number | undefined {
-  if (format === "jpeg") return 0.95;
-  if (format === "webp") return 0.9;
-  return undefined;
-}
-
-

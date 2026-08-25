@@ -2,6 +2,7 @@ import { buildOriginalFilename } from "./conversion.ts";
 
 interface OriginalDownloadRequest {
   imageUrl: string;
+  subfolder: string;
 }
 
 interface OriginalDownload {
@@ -14,8 +15,12 @@ export function buildOriginalDownload(request: OriginalDownloadRequest): Origina
 
   return {
     url: request.imageUrl,
-    ...(filename && { filename }),
+    ...(filename && { filename: withSubfolder(filename, request.subfolder) }),
   };
+}
+
+export function withSubfolder(filename: string, subfolder: string): string {
+  return subfolder ? `${subfolder}/${filename}` : filename;
 }
 
 export async function dataUrlToBlob(dataUrl: string): Promise<Blob> {

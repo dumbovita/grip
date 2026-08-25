@@ -12,6 +12,7 @@ export default defineConfig({
       "contextMenus",
       "downloads",
       "notifications",
+      "storage",
       ...(manifestVersion === 3 ? ["offscreen"] : []),
     ],
     host_permissions: ["*://*/*"],

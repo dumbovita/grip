@@ -5,6 +5,8 @@ export interface ConvertMessage {
   dataUrl: string;
   originalUrl: string;
   format: ConvertFormat;
+  quality?: number;
+  background?: string;
 }
 
 export type ConvertResponse =
