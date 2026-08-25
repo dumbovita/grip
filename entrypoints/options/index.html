@@ -1,0 +1,102 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>grip settings</title>
+    <link rel="stylesheet" href="../../src/ui.css" />
+    <link rel="stylesheet" href="./options.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>grip</h1>
+        <p class="hint">Changes save automatically.</p>
+      </header>
+
+      <section>
+        <h2>Context menu</h2>
+        <label class="row">
+          <span>Default format</span>
+          <select id="default-format">
+            <option value="">Show menu</option>
+            <option value="png">PNG</option>
+            <option value="jpeg">JPG</option>
+            <option value="webp">WebP</option>
+          </select>
+        </label>
+        <div class="row">
+          <span>Formats in menu</span>
+          <span class="checks">
+            <label><input type="checkbox" data-format="png" /><span>PNG</span></label>
+            <label><input type="checkbox" data-format="jpeg" /><span>JPG</span></label>
+            <label><input type="checkbox" data-format="webp" /><span>WebP</span></label>
+          </span>
+        </div>
+        <label class="row">
+          <span>Show “Save Original”</span>
+          <input type="checkbox" id="show-original" />
+        </label>
+        <p class="hint">A default format collapses the menu into a single action.</p>
+      </section>
+
+      <section>
+        <h2>Conversion</h2>
+        <label class="row">
+          <span>JPG quality</span>
+          <span class="range">
+            <input type="range" id="jpeg-quality" min="1" max="100" step="1" />
+            <output id="jpeg-quality-value">95</output>
+          </span>
+        </label>
+        <label class="row">
+          <span>WebP quality</span>
+          <span class="range">
+            <input type="range" id="webp-quality" min="1" max="100" step="1" />
+            <output id="webp-quality-value">90</output>
+          </span>
+        </label>
+        <label class="row">
+          <span>JPG background</span>
+          <span class="range">
+            <input type="color" id="jpeg-background" />
+            <output id="jpeg-background-value">#ffffff</output>
+          </span>
+        </label>
+        <p class="hint">Replaces transparency when converting to JPG.</p>
+      </section>
+
+      <section>
+        <h2>Downloads</h2>
+        <label class="row">
+          <span>Subfolder</span>
+          <input type="text" id="subfolder" placeholder="Downloads root" spellcheck="false" />
+        </label>
+        <label class="row">
+          <span>Name conflicts</span>
+          <select id="conflict-action">
+            <option value="uniquify">Keep both</option>
+            <option value="overwrite">Overwrite</option>
+            <option value="prompt">Ask where to save</option>
+          </select>
+        </label>
+        <p class="hint" id="conflict-hint" hidden>Firefox always keeps both files.</p>
+        <p class="hint">The subfolder is created inside your Downloads folder.</p>
+      </section>
+
+      <section>
+        <h2>Feedback</h2>
+        <label class="row">
+          <span>Notifications</span>
+          <select id="feedback">
+            <option value="failures">Failures only</option>
+            <option value="all">Every save</option>
+            <option value="off">Off</option>
+          </select>
+        </label>
+        <p class="hint">Successful saves flash the toolbar badge.</p>
+      </section>
+    </main>
+
+    <script type="module" src="./options.ts"></script>
+  </body>
+</html>

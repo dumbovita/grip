@@ -1,0 +1,54 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>grip</title>
+    <link rel="stylesheet" href="../../src/ui.css" />
+    <link rel="stylesheet" href="./popup.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>grip</h1>
+        <button id="open-settings" type="button">Settings</button>
+      </header>
+
+      <label class="row">
+        <span>Default format</span>
+        <select id="default-format">
+          <option value="">Show menu</option>
+          <option value="png">PNG</option>
+          <option value="jpeg">JPG</option>
+          <option value="webp">WebP</option>
+        </select>
+      </label>
+
+      <label class="row">
+        <span>JPG quality</span>
+        <span class="range">
+          <input type="range" id="jpeg-quality" min="1" max="100" step="1" />
+          <output id="jpeg-quality-value">95</output>
+        </span>
+      </label>
+
+      <label class="row">
+        <span>WebP quality</span>
+        <span class="range">
+          <input type="range" id="webp-quality" min="1" max="100" step="1" />
+          <output id="webp-quality-value">90</output>
+        </span>
+      </label>
+
+      <label class="row">
+        <span>Notifications</span>
+        <select id="feedback">
+          <option value="failures">Failures only</option>
+          <option value="all">Every save</option>
+          <option value="off">Off</option>
+        </select>
+      </label>
+    </main>
+
+    <script type="module" src="./popup.ts"></script>
+  </body>
+</html>
