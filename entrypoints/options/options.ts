@@ -21,7 +21,8 @@ function render(settings: Settings): void {
   current = settings;
   defaultFormatSelect.value = settings.defaultFormat ?? "";
   for (const check of formatChecks) {
-    check.checked = settings.formats.includes(check.value as ConvertFormat);
+    const format = (check.dataset.format ?? check.value) as ConvertFormat;
+    check.checked = settings.formats.includes(format);
   }
   showOriginalCheck.checked = settings.showOriginal;
   jpegQualityInput.value = String(settings.jpegQuality);
@@ -45,7 +46,11 @@ defaultFormatSelect.addEventListener("change", () =>
 
 for (const check of formatChecks) {
   check.addEventListener("change", () =>
-    persist({ formats: formatChecks.filter((box) => box.checked).map((box) => box.value as ConvertFormat) }),
+    persist({
+      formats: formatChecks
+        .filter((box) => box.checked)
+        .map((box) => (box.dataset.format ?? box.value) as ConvertFormat),
+    }),
   );
 }
 
@@ -68,7 +73,6 @@ jpegBackgroundInput.addEventListener("change", () => persist({ jpegBackground: j
 
 subfolderInput.addEventListener("change", () => {
   persist({ subfolder: subfolderInput.value });
-  subfolderInput.value = current.subfolder;
 });
 
 if (navigator.userAgent.includes("Firefox")) {

@@ -121,4 +121,20 @@ test("blobToDataUrl correctly converts a Blob to a base64 data URL", async () =>
   assert.equal(dataUrl, photoDataUrl);
 });
 
+test("blobToDataUrl works in environments where Buffer is unavailable (e.g. Service Worker)", async () => {
+  const originalBuffer = globalThis.Buffer;
+  try {
+    // @ts-expect-error simulating service worker environment without Buffer
+    delete globalThis.Buffer;
+    const fixture = readFileSync("test/fixtures/1428178080167.test.png");
+    const blob = new Blob([fixture], { type: "image/png" });
+    const dataUrl = await blobToDataUrl(blob);
+
+    assert.ok(dataUrl.startsWith("data:image/png;base64,"));
+    assert.equal(dataUrl, photoDataUrl);
+  } finally {
+    globalThis.Buffer = originalBuffer;
+  }
+});
+
 

@@ -1,4 +1,4 @@
-import { loadSettings, saveSettings, type Settings } from "../../src/settings";
+import { defaultSettings, loadSettings, saveSettings, type Settings } from "../../src/settings";
 import type { ConvertFormat } from "../../src/types";
 
 const defaultFormatSelect = document.getElementById("default-format") as HTMLSelectElement;
@@ -9,7 +9,10 @@ const webpQualityValue = document.getElementById("webp-quality-value") as HTMLOu
 const feedbackSelect = document.getElementById("feedback") as HTMLSelectElement;
 const openSettingsButton = document.getElementById("open-settings") as HTMLButtonElement;
 
+let current: Settings = defaultSettings;
+
 function render(settings: Settings): void {
+  current = settings;
   defaultFormatSelect.value = settings.defaultFormat ?? "";
   jpegQualityInput.value = String(settings.jpegQuality);
   jpegQualityValue.textContent = String(settings.jpegQuality);
@@ -18,9 +21,8 @@ function render(settings: Settings): void {
   feedbackSelect.value = settings.feedback;
 }
 
-async function persist(patch: Partial<Settings>): Promise<void> {
-  const settings = await loadSettings();
-  render(saveSettings({ ...settings, ...patch }));
+function persist(patch: Partial<Settings>): void {
+  render(saveSettings({ ...current, ...patch }));
 }
 
 defaultFormatSelect.addEventListener("change", () =>
@@ -40,5 +42,9 @@ webpQualityInput.addEventListener("change", () => persist({ webpQuality: Number(
 feedbackSelect.addEventListener("change", () => persist({ feedback: feedbackSelect.value as Settings["feedback"] }));
 
 openSettingsButton.addEventListener("click", () => browser.runtime.openOptionsPage());
+
+browser.storage.onChanged.addListener(async () => {
+  render(await loadSettings());
+});
 
 loadSettings().then(render);

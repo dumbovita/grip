@@ -2,7 +2,7 @@ import type { ConvertFormat } from "./types";
 
 export interface ConvertImageRequest {
   dataUrl: string;
-  originalUrl: string;
+  originalUrl?: string;
   format: ConvertFormat;
   quality?: number;
   background?: string;
@@ -10,7 +10,7 @@ export interface ConvertImageRequest {
 
 export interface ConvertedImage {
   dataUrl: string;
-  filename: string;
+  filename?: string;
 }
 
 const reservedNames = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
@@ -58,7 +58,7 @@ export async function convertImage(request: ConvertImageRequest): Promise<Conver
     try {
       return {
         dataUrl: canvas.toDataURL(`image/${request.format}`, request.quality),
-        filename: buildFilename(request.originalUrl, request.format),
+        ...(request.originalUrl && { filename: buildFilename(request.originalUrl, request.format) }),
       };
     } finally {
       canvas.width = 0;
@@ -209,7 +209,15 @@ export async function blobToDataUrl(blob: Blob): Promise<string> {
   }
 
   const buffer = await blob.arrayBuffer();
-  const base64 = Buffer.from(buffer).toString("base64");
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const len = bytes.byteLength;
+  const CHUNK_SIZE = 0x8000;
+  for (let i = 0; i < len; i += CHUNK_SIZE) {
+    const chunk = bytes.subarray(i, Math.min(i + CHUNK_SIZE, len));
+    binary += String.fromCharCode(...chunk);
+  }
+  const base64 = btoa(binary);
   return `data:${blob.type || "application/octet-stream"};base64,${base64}`;
 }
 

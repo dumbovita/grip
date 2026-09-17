@@ -24,5 +24,6 @@ export function withSubfolder(filename: string, subfolder: string): string {
 }
 
 export async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
-  return await (await fetch(dataUrl)).blob();
+  const response = await fetch(dataUrl);
+  return response.blob();
 }

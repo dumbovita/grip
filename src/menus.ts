@@ -1,5 +1,5 @@
-import type { Settings } from "./settings";
-import type { ConvertFormat } from "./types";
+import type { Settings } from "./settings.ts";
+import { formatLabels, type ConvertFormat } from "./types.ts";
 
 export interface MenuItem {
   id: string;
@@ -8,9 +8,9 @@ export interface MenuItem {
 }
 
 const menuFormats: { format: ConvertFormat; id: string; title: string }[] = [
-  { format: "png", id: "save-png", title: "Save as PNG" },
-  { format: "jpeg", id: "save-jpg", title: "Save as JPG" },
-  { format: "webp", id: "save-webp", title: "Save as WebP" },
+  { format: "png", id: "save-png", title: `Save as ${formatLabels.png}` },
+  { format: "jpeg", id: "save-jpg", title: `Save as ${formatLabels.jpeg}` },
+  { format: "webp", id: "save-webp", title: `Save as ${formatLabels.webp}` },
 ];
 
 export function menuItems(settings: Settings): MenuItem[] {

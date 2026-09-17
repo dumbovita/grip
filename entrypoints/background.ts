@@ -1,9 +1,9 @@
 import type { Browser } from "wxt/browser";
-import type { ConvertFormat, ConvertResponse } from "../src/types";
-import { blobToDataUrl, buildFilename, convertImage, isSameImageFormat, sniffImageFormat } from "../src/conversion";
-import { buildOriginalDownload, dataUrlToBlob, withSubfolder } from "../src/download";
-import { formatForMenuItem, menuItems } from "../src/menus";
-import { loadSettings, type Settings } from "../src/settings";
+import { formatLabels, type ConvertFormat, type ConvertResponse } from "../src/types.ts";
+import { blobToDataUrl, buildFilename, convertImage, isSameImageFormat, sniffImageFormat } from "../src/conversion.ts";
+import { buildOriginalDownload, dataUrlToBlob, withSubfolder } from "../src/download.ts";
+import { formatForMenuItem, menuItems } from "../src/menus.ts";
+import { loadSettings, type Settings } from "../src/settings.ts";
 
 type FetchedImage =
   | { kind: "convert"; dataUrl: string }
@@ -11,11 +11,10 @@ type FetchedImage =
   | { kind: "download-original-blob"; blob: Blob };
 
 export default defineBackground(() => {
-  const displayMap: Record<ConvertFormat, string> = { png: "PNG", jpeg: "JPG", webp: "WebP" };
-
   let offscreenPromise: Promise<void> | null = null;
   let activeConversions = 0;
   let closeTimeout: ReturnType<typeof setTimeout> | null = null;
+  let badgeTimeout: ReturnType<typeof setTimeout> | null = null;
   let notificationCounter = 0;
 
   function notify(message: string): void {
@@ -36,7 +35,11 @@ export default defineBackground(() => {
     const action = import.meta.env.MANIFEST_VERSION === 2 ? browser.browserAction : browser.action;
     await action.setBadgeBackgroundColor({ color: "#2e7d46" });
     await action.setBadgeText({ text: "✓" });
-    setTimeout(() => action.setBadgeText({ text: "" }), 2000);
+    if (badgeTimeout) clearTimeout(badgeTimeout);
+    badgeTimeout = setTimeout(() => {
+      badgeTimeout = null;
+      void action.setBadgeText({ text: "" });
+    }, 2000);
   }
 
   async function rebuildMenus(): Promise<void> {
@@ -56,9 +59,11 @@ export default defineBackground(() => {
       clearTimeout(closeTimeout);
       closeTimeout = null;
     }
-    activeConversions++;
 
-    if (await browser.offscreen.hasDocument()) return;
+    if (await browser.offscreen.hasDocument()) {
+      activeConversions++;
+      return;
+    }
 
     offscreenPromise ??= browser.offscreen
       .createDocument({
@@ -71,6 +76,23 @@ export default defineBackground(() => {
       });
 
     await offscreenPromise;
+    activeConversions++;
+  }
+
+  async function sendMessageWithRetry<T>(message: unknown, maxAttempts = 5, delayMs = 50): Promise<T> {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await (browser.runtime.sendMessage(message) as Promise<T>);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (attempt < maxAttempts && msg.includes("Receiving end does not exist")) {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error("Failed to send message to offscreen document");
   }
 
   function releaseOffscreenDocument(): void {
@@ -134,11 +156,19 @@ export default defineBackground(() => {
 
   async function saveOriginal(imageUrl: string, settings: Settings): Promise<void> {
     const downloadId = await startDownload(buildOriginalDownload({ imageUrl, subfolder: settings.subfolder }), settings);
-    if (downloadId !== null) await flashBadge();
+    if (downloadId !== null) {
+      await flashBadge();
+      if (settings.feedback === "all") notify("Saved original image");
+    }
   }
 
-  async function fetchImage(url: string, targetFormat: ConvertFormat): Promise<FetchedImage> {
-    const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
+  async function fetchImage(url: string, targetFormat: ConvertFormat, referrer?: string): Promise<FetchedImage> {
+    const fetchOptions: RequestInit = {
+      signal: AbortSignal.timeout(15000),
+      credentials: "include",
+      ...(referrer && { referrer }),
+    };
+    const response = await fetch(url, fetchOptions);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
     const responseMimeType = response.headers.get("content-type") || "";
@@ -190,14 +220,18 @@ export default defineBackground(() => {
     }
 
     await acquireOffscreenDocument();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("Conversion timeout")), 30000);
+    });
+
     try {
       return await Promise.race([
-        browser.runtime.sendMessage({ type: "convert", ...request }) as Promise<ConvertResponse>,
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("Conversion timeout")), 30000),
-        ),
+        sendMessageWithRetry<ConvertResponse>({ type: "convert", ...request }),
+        timeoutPromise,
       ]);
     } finally {
+      if (timer) clearTimeout(timer);
       releaseOffscreenDocument();
     }
   }
@@ -224,16 +258,16 @@ export default defineBackground(() => {
   async function fallbackToOriginal(imageUrl: string, targetFormat: ConvertFormat, settings: Settings): Promise<void> {
     const downloadId = await startDownload(buildOriginalDownload({ imageUrl, subfolder: settings.subfolder }), settings);
     if (downloadId !== null && settings.feedback !== "off") {
-      notify(`Saved in original format — could not convert to ${displayMap[targetFormat]}`);
+      notify(`Saved in original format — could not convert to ${formatLabels[targetFormat]}`);
     }
   }
 
   async function reportSave(targetFormat: ConvertFormat, settings: Settings): Promise<void> {
     await flashBadge();
-    if (settings.feedback === "all") notify(`Saved as ${displayMap[targetFormat]}`);
+    if (settings.feedback === "all") notify(`Saved as ${formatLabels[targetFormat]}`);
   }
 
-  async function saveImageAs(imageUrl: string, targetFormat: ConvertFormat, settings: Settings): Promise<void> {
+  async function saveImageAs(imageUrl: string, targetFormat: ConvertFormat, settings: Settings, referrer?: string): Promise<void> {
     const filename = withSubfolder(buildFilename(imageUrl, targetFormat), settings.subfolder);
 
     if (imageUrl.startsWith("data:")) {
@@ -250,7 +284,7 @@ export default defineBackground(() => {
 
     let fetchedImage: FetchedImage;
     try {
-      fetchedImage = await fetchImage(imageUrl, targetFormat);
+      fetchedImage = await fetchImage(imageUrl, targetFormat, referrer);
     } catch (err) {
       console.error("grip: fetch failed:", imageUrl, err);
       await fallbackToOriginal(imageUrl, targetFormat, settings);
@@ -273,7 +307,9 @@ export default defineBackground(() => {
     }
   }
 
+  void rebuildMenus();
   browser.runtime.onInstalled.addListener(rebuildMenus);
+  browser.runtime.onStartup?.addListener(rebuildMenus);
   browser.storage.onChanged.addListener(rebuildMenus);
 
   browser.contextMenus.onClicked.addListener(async (info) => {
@@ -288,6 +324,6 @@ export default defineBackground(() => {
     }
 
     const targetFormat = formatForMenuItem(info.menuItemId);
-    if (targetFormat) await saveImageAs(imageUrl, targetFormat, settings);
+    if (targetFormat) await saveImageAs(imageUrl, targetFormat, settings, info.pageUrl);
   });
 });

@@ -1,4 +1,4 @@
-# GRIP - Firefox Extension
+# GRIP - Browser Extension
 
 Get Right-click Images Properly: save images as PNG, JPG, or WebP.
 
