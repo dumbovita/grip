@@ -34,9 +34,7 @@ jobs:
           npm run zip:firefox
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: .output/*.zip
-          generate_release_notes: true
-          draft: false
-          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" .output/*.zip --generate-notes
